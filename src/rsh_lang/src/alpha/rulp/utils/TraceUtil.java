@@ -22,14 +22,12 @@ import alpha.rulp.lang.IRSubject;
 import alpha.rulp.lang.IRVar;
 import alpha.rulp.lang.RException;
 import alpha.rulp.lang.RType;
+import alpha.rulp.runtime.IRCallable;
 import alpha.rulp.runtime.IRFunction;
 import alpha.rulp.runtime.IRInterpreter;
 import alpha.rulp.runtime.IRTemplate;
 import alpha.rulp.runtime.IRThreadContext;
-import alpha.rulp.ximpl.optimize.CCOUtil;
-import alpha.rulp.ximpl.optimize.EROUtil;
 import alpha.rulp.ximpl.optimize.LCOUtil;
-import alpha.rulp.ximpl.optimize.TCOUtil;
 
 public class TraceUtil {
 
@@ -127,13 +125,264 @@ public class TraceUtil {
 
 	}
 
+	public interface IROptInfoTracer {
+		public String printInfo(IRInterpreter interpreter) throws RException;
+	}
+
+	static Map<String, IROptInfoTracer> optTracerMap = new HashMap<>();
+
+	static List<String> optTracerNameList = new ArrayList<>();
+
+//	private static StaticVar varTrace = new StaticVar(A_TRACE, O_False);
+
 	static final String SEP_LINE1 = "==========================================================================================================================\n";
 
 	static final String SEP_LINE2 = "--------------------------------------------------------------------------------------------------------------------------\n";
 
 	static final String SEP_LINE3 = "..........................................................................................................................\n";
 
-//	private static StaticVar varTrace = new StaticVar(A_TRACE, O_False);
+	static {
+		registerOptInfoTracer("LCO", (_interpreter) -> {
+			return String.format("rebuild=%d, arg=%d, pass=%d, hit=%d", LCOUtil.getRebuildCount(),
+					LCOUtil.getArgCount(), LCOUtil.getPassCount(), LCOUtil.getHitCount());
+		});
+	}
+
+	private static String _getEntryAliasName(IRFrameEntry entry) {
+
+		String name = entry.getName();
+		if (!entry.getAliasName().isEmpty()) {
+			name += "(";
+			for (int i = 0; i < entry.getAliasName().size(); ++i) {
+				if (i != 0) {
+					name += ",";
+				}
+				name += entry.getAliasName().get(i);
+			}
+			name += ")";
+		}
+
+		return name;
+	}
+
+	private static void _printCallableStatsInfo(StringBuffer sb, IRInterpreter interpreter) throws RException {
+
+		ArrayList<Pair<Pair<IRObject, IRFrame>, DeCounter>> ccList = new ArrayList<>();
+
+		// main frame
+		{
+			IRFrame frame = interpreter.getMainFrame();
+			for (Entry<IRObject, DeCounter> e : RuntimeUtil.getObjecCallCount(frame).entrySet()) {
+				ccList.add(new Pair<>(new Pair<>(e.getKey(), frame), e.getValue()));
+			}
+		}
+
+		// system frame
+		{
+			IRFrame frame = interpreter.getMainFrame().getParentFrame();
+			for (Entry<IRObject, DeCounter> e : RuntimeUtil.getObjecCallCount(frame).entrySet()) {
+				ccList.add(new Pair<>(new Pair<>(e.getKey(), frame), e.getValue()));
+			}
+		}
+
+		// root frame
+		{
+			IRFrame frame = interpreter.getMainFrame().getParentFrame().getParentFrame();
+			for (Entry<IRObject, DeCounter> e : RuntimeUtil.getObjecCallCount(frame).entrySet()) {
+				ccList.add(new Pair<>(new Pair<>(e.getKey(), frame), e.getValue()));
+			}
+		}
+
+		Collections.sort(ccList, (e1, e2) -> {
+			int d = e2.getValue().getTotalCount() - e1.getValue().getTotalCount();
+			if (d == 0) {
+				d = e2.getKey().getKey().asString().compareTo(e1.getKey().getKey().asString());
+			}
+
+			if (d == 0) {
+				d = e2.getKey().getValue().getFrameName().compareTo(e1.getKey().getValue().getFrameName());
+			}
+
+			return d;
+		});
+
+		ArrayList<DeCounter> counters = new ArrayList<>();
+
+		for (Pair<Pair<IRObject, IRFrame>, DeCounter> e : ccList) {
+			counters.add(e.getValue());
+		}
+
+		ArrayList<String> counterLines = formatCounterTable(counters, MAX_COUNTER_SIZE);
+		int counterLineIndex = 0;
+
+		sb.append(String.format("Callable stats info: callId=%d, %s\n", interpreter.getCallId(),
+				counterLines.get(counterLineIndex++)));
+		sb.append(SEP_LINE1);
+		sb.append(String.format("%8s %8s %6s %4s %-30s %s\n", "Frame", "RType", "Count", "Ref", "Object",
+				counterLines.get(counterLineIndex++)));
+		sb.append(SEP_LINE2);
+
+		for (Pair<Pair<IRObject, IRFrame>, DeCounter> e : ccList) {
+
+			DeCounter counter = e.getValue();
+			IRFrame frame = e.getKey().getValue();
+			IRObject obj = e.getKey().getKey();
+
+			String objName = "" + obj;
+			if (objName.length() > 30) {
+				objName = objName.substring(0, 30);
+			}
+
+			sb.append(String.format("%8s %8s %6s %4s %-30s %s\n", frame.getFrameName(), _toTypeString(obj),
+					counter.getTotalCount(), _toRefString(obj), objName, counterLines.get(counterLineIndex++)));
+		}
+
+		sb.append(SEP_LINE1);
+		sb.append("\n");
+	}
+
+//	public static void init(IRFrame frame) throws RException {
+//		varTrace.init(frame);
+//	}
+//
+//	public static boolean isTrace() throws RException {
+//		return varTrace.getBoolValue();
+//	}
+
+	private static void _printCallerAnnotation(StringBuffer sb, IRInterpreter interpreter) throws RException {
+
+		List<IRFrame> allFrames = new ArrayList<>();
+		allFrames.add(interpreter.getMainFrame().getParentFrame().getParentFrame());
+		allFrames.add(interpreter.getMainFrame().getParentFrame());
+		allFrames.add(interpreter.getMainFrame());
+		allFrames.addAll(RulpFactory.listGlobalFrames());
+
+		boolean outputHead = false;
+
+		for (IRFrame frame : allFrames) {
+
+			List<IRFrameEntry> frameEntries = null;
+
+			for (IRFrameEntry entry : frame.listEntries()) {
+				IRObject obj = entry.getValue();
+				if (obj instanceof IRCallable) {
+					IRCallable callObj = (IRCallable) obj;
+					if (callObj.hasBeforeAnnotation() || callObj.hasAfterAnnotation()) {
+						if (frameEntries == null) {
+							frameEntries = new ArrayList<>();
+						}
+						frameEntries.add(entry);
+					}
+				}
+			}
+
+			if (frameEntries == null) {
+				continue;
+			}
+
+			Collections.sort(frameEntries, (f1, f2) -> {
+				return f1.getEntryId() - f2.getEntryId();
+			});
+
+			for (IRFrameEntry entry : frameEntries) {
+
+				IRCallable callObj = (IRCallable) entry.getObject();
+
+				if (!outputHead) {
+					sb.append("Caller annotation:\n");
+					sb.append(SEP_LINE1);
+					sb.append(String.format("%-20s : %-8s %-8s %-10s %s\n", "Name(alias)", "EntryId", "FrameId", "Type",
+							"Annotation"));
+					sb.append(SEP_LINE2);
+					outputHead = true;
+				}
+
+				String name = _getEntryAliasName(entry);
+				IRFrame entryFrame = entry.getFrame();
+
+				String out = "";
+				if (callObj.hasBeforeAnnotation()) {
+					out += "before: " + callObj.listBeforeAnnotationAttr();
+				}
+
+				if (callObj.hasAfterAnnotation()) {
+					if (!out.isEmpty()) {
+						out += ", ";
+					}
+					out += "after: " + callObj.listAfterAnnotationAttr();
+				}
+
+				sb.append(String.format("%-20s : %-8d %-8s %-10s %s\n", name, entry.getEntryId(),
+						entryFrame == null ? -1 : entryFrame.getFrameId(), _toTypeString(callObj), out));
+			}
+		}
+
+		if (outputHead) {
+			sb.append(SEP_LINE1);
+			sb.append("\n");
+		}
+	}
+
+	private static void _printExpressionComputeCount(StringBuffer sb, IRInterpreter interpreter) throws RException {
+
+		sb.append("Expression compute count:\n");
+		sb.append(SEP_LINE1);
+		sb.append(String.format("%10s: %8s\n", "RType", "Count"));
+		sb.append(SEP_LINE2);
+		for (RType t : RType.ALL_RTYPE) {
+
+			int count = RuntimeUtil.getExprComputeCount(t);
+			if (count == 0) {
+				continue;
+			}
+
+			sb.append(String.format("%10s: %8d\n", _toTypeString(t), count));
+		}
+		sb.append(SEP_LINE1);
+		sb.append("\n");
+	}
+
+	private static void _printObjectCreateCount(StringBuffer sb, IRInterpreter interpreter) throws RException {
+
+		sb.append("Object create count:\n");
+		sb.append(SEP_LINE1);
+		sb.append(String.format("%12s: %12s %12s %12s\n", "RType", "Create", "Delete", "Exist"));
+		sb.append(SEP_LINE2);
+		for (RType t : RType.ALL_RTYPE) {
+			int createCount = RulpFactory.getObjectCreateCount(t);
+			if (createCount == 0) {
+				continue;
+			}
+
+			int deleteCount = RulpFactory.getObjectDeleteCount(t);
+			sb.append(String.format("%12s: %12d %12d %12d\n", _toTypeString(t), createCount, deleteCount,
+					createCount - deleteCount));
+		}
+
+		sb.append(String.format("%12s: %12d %12d\n", "interpreter", RulpFactory.getInterpreterCount(), 0));
+		sb.append(String.format("%12s: %12d %12d\n", "frameEntry", RulpFactory.getFrameEntryCreateCount(), 0));
+		sb.append(String.format("%12s: %12d %12d\n", "lambda", RulpFactory.getLambdaCount(), 0));
+
+		sb.append(SEP_LINE1);
+		sb.append("\n");
+	}
+
+	private static void _printTotalRunTimeInfo(StringBuffer sb, IRInterpreter interpreter) {
+
+		sb.append("Total runtime info:\n");
+		sb.append(SEP_LINE1);
+		sb.append(String.format("%30s: %8s\n", "Name", "info"));
+		sb.append(SEP_LINE2);
+		sb.append(String.format("%30s: %8d\n", "Interpreter call id", interpreter.getCallId()));
+		sb.append(String.format("%30s: %8d %8d\n", "Interpreter call level/max", interpreter.getTLS().getCallLevel(),
+				interpreter.getMaxCallLevel()));
+		sb.append(String.format("%30s: %8d\n", "Frame max level", RuntimeUtil.getFrameMaxLevel()));
+		sb.append(String.format("%30s: %8d\n", "Frame max id", RulpFactory.getFrameMaxId()));
+		sb.append(String.format("%30s: %8d\n", "Frame free id count", RulpFactory.getFrameFreeIdCount()));
+		sb.append(SEP_LINE1);
+		sb.append("\n");
+
+	}
 
 	private static String _toRefString(IRObject obj) throws RException {
 
@@ -333,14 +582,6 @@ public class TraceUtil {
 		return lines;
 	}
 
-//	public static void init(IRFrame frame) throws RException {
-//		varTrace.init(frame);
-//	}
-//
-//	public static boolean isTrace() throws RException {
-//		return varTrace.getBoolValue();
-//	}
-
 	public static String outputFrameTree(IRInterpreter interpreter) throws RException {
 
 		return new FrameTree(RulpFactory.listGlobalFrames(), interpreter).output();
@@ -396,18 +637,7 @@ public class TraceUtil {
 
 				IRObject entryObj = entry.getObject();
 
-				String name = entry.getName();
-				if (!entry.getAliasName().isEmpty()) {
-					name += "(";
-					for (int i = 0; i < entry.getAliasName().size(); ++i) {
-						if (i != 0) {
-							name += ",";
-						}
-						name += entry.getAliasName().get(i);
-					}
-					name += ")";
-				}
-
+				String name = _getEntryAliasName(entry);
 				IRFrame entryFrame = entry.getFrame();
 
 				sb.append(String.format("%-20s : %-8d %-8s %-4s %-10s %-20s\n", name, entry.getEntryId(),
@@ -441,18 +671,7 @@ public class TraceUtil {
 		/***********************************************/
 		// total runtime info
 		/***********************************************/
-		sb.append("Total runtime info:\n");
-		sb.append(SEP_LINE1);
-		sb.append(String.format("%30s: %8s\n", "Name", "info"));
-		sb.append(SEP_LINE2);
-		sb.append(String.format("%30s: %8d\n", "Interpreter call id", interpreter.getCallId()));
-		sb.append(String.format("%30s: %8d %8d\n", "Interpreter call level/max", interpreter.getTLS().getCallLevel(),
-				interpreter.getMaxCallLevel()));
-		sb.append(String.format("%30s: %8d\n", "Frame max level", RuntimeUtil.getFrameMaxLevel()));
-		sb.append(String.format("%30s: %8d\n", "Frame max id", RulpFactory.getFrameMaxId()));
-		sb.append(String.format("%30s: %8d\n", "Frame free id count", RulpFactory.getFrameFreeIdCount()));
-		sb.append(SEP_LINE1);
-		sb.append("\n");
+		_printTotalRunTimeInfo(sb, interpreter);
 
 		/***********************************************/
 		// Optimize info
@@ -464,125 +683,22 @@ public class TraceUtil {
 		/***********************************************/
 		// expression compute count
 		/***********************************************/
-		sb.append("Expression compute count:\n");
-		sb.append(SEP_LINE1);
-		sb.append(String.format("%10s: %8s\n", "RType", "Count"));
-		sb.append(SEP_LINE2);
-		for (RType t : RType.ALL_RTYPE) {
-
-			int count = RuntimeUtil.getExprComputeCount(t);
-			if (count == 0) {
-				continue;
-			}
-
-			sb.append(String.format("%10s: %8d\n", _toTypeString(t), count));
-		}
-		sb.append(SEP_LINE1);
-		sb.append("\n");
+		_printExpressionComputeCount(sb, interpreter);
 
 		/***********************************************/
 		// Callable stats info
 		/***********************************************/
-		{
+		_printCallableStatsInfo(sb, interpreter);
 
-			ArrayList<Pair<Pair<IRObject, IRFrame>, DeCounter>> ccList = new ArrayList<>();
-
-			// main frame
-			{
-				IRFrame frame = interpreter.getMainFrame();
-				for (Entry<IRObject, DeCounter> e : RuntimeUtil.getObjecCallCount(frame).entrySet()) {
-					ccList.add(new Pair<>(new Pair<>(e.getKey(), frame), e.getValue()));
-				}
-			}
-
-			// system frame
-			{
-				IRFrame frame = interpreter.getMainFrame().getParentFrame();
-				for (Entry<IRObject, DeCounter> e : RuntimeUtil.getObjecCallCount(frame).entrySet()) {
-					ccList.add(new Pair<>(new Pair<>(e.getKey(), frame), e.getValue()));
-				}
-			}
-
-			// root frame
-			{
-				IRFrame frame = interpreter.getMainFrame().getParentFrame().getParentFrame();
-				for (Entry<IRObject, DeCounter> e : RuntimeUtil.getObjecCallCount(frame).entrySet()) {
-					ccList.add(new Pair<>(new Pair<>(e.getKey(), frame), e.getValue()));
-				}
-			}
-
-			Collections.sort(ccList, (e1, e2) -> {
-				int d = e2.getValue().getTotalCount() - e1.getValue().getTotalCount();
-				if (d == 0) {
-					d = e2.getKey().getKey().asString().compareTo(e1.getKey().getKey().asString());
-				}
-
-				if (d == 0) {
-					d = e2.getKey().getValue().getFrameName().compareTo(e1.getKey().getValue().getFrameName());
-				}
-
-				return d;
-			});
-
-			ArrayList<DeCounter> counters = new ArrayList<>();
-
-			for (Pair<Pair<IRObject, IRFrame>, DeCounter> e : ccList) {
-				counters.add(e.getValue());
-			}
-
-			ArrayList<String> counterLines = formatCounterTable(counters, MAX_COUNTER_SIZE);
-			int counterLineIndex = 0;
-
-			sb.append(String.format("Callable stats info: callId=%d, %s\n", interpreter.getCallId(),
-					counterLines.get(counterLineIndex++)));
-			sb.append(SEP_LINE1);
-			sb.append(String.format("%8s %8s %6s %4s %-30s %s\n", "Frame", "RType", "Count", "Ref", "Object",
-					counterLines.get(counterLineIndex++)));
-			sb.append(SEP_LINE2);
-
-			for (Pair<Pair<IRObject, IRFrame>, DeCounter> e : ccList) {
-
-				DeCounter counter = e.getValue();
-				IRFrame frame = e.getKey().getValue();
-				IRObject obj = e.getKey().getKey();
-
-				String objName = "" + obj;
-				if (objName.length() > 30) {
-					objName = objName.substring(0, 30);
-				}
-
-				sb.append(String.format("%8s %8s %6s %4s %-30s %s\n", frame.getFrameName(), _toTypeString(obj),
-						counter.getTotalCount(), _toRefString(obj), objName, counterLines.get(counterLineIndex++)));
-			}
-
-			sb.append(SEP_LINE1);
-			sb.append("\n");
-		}
+		/***********************************************/
+		// Annotation Builders
+		/***********************************************/
+		_printCallerAnnotation(sb, interpreter);
 
 		/***********************************************/
 		// object create count
 		/***********************************************/
-		sb.append("Object create count:\n");
-		sb.append(SEP_LINE1);
-		sb.append(String.format("%12s: %12s %12s %12s\n", "RType", "Create", "Delete", "Exist"));
-		sb.append(SEP_LINE2);
-		for (RType t : RType.ALL_RTYPE) {
-			int createCount = RulpFactory.getObjectCreateCount(t);
-			if (createCount == 0) {
-				continue;
-			}
-
-			int deleteCount = RulpFactory.getObjectDeleteCount(t);
-			sb.append(String.format("%12s: %12d %12d %12d\n", _toTypeString(t), createCount, deleteCount,
-					createCount - deleteCount));
-		}
-
-		sb.append(String.format("%12s: %12d %12d\n", "interpreter", RulpFactory.getInterpreterCount(), 0));
-		sb.append(String.format("%12s: %12d %12d\n", "frameEntry", RulpFactory.getFrameEntryCreateCount(), 0));
-		sb.append(String.format("%12s: %12d %12d\n", "lambda", RulpFactory.getLambdaCount(), 0));
-
-		sb.append(SEP_LINE1);
-		sb.append("\n");
+		_printObjectCreateCount(sb, interpreter);
 
 		/***********************************************/
 		// Global frame list
@@ -679,19 +795,21 @@ public class TraceUtil {
 
 	public static void printOptimizeInfo(StringBuffer sb, IRInterpreter interpreter) throws RException {
 
+		if (optTracerNameList == null) {
+			return;
+		}
+
 		sb.append(SEP_LINE1);
 		sb.append(String.format("%10s: %s\n", "Name", "Status"));
 		sb.append(SEP_LINE2);
-		sb.append(String.format("%10s: rebuild=%d, compute=%d\n", "ERO", EROUtil.getRebuildCount(),
-				EROUtil.getComputeCount()));
-		sb.append(String.format("%10s: rebuild=%d, expr=%d, call=%d, cache=%d, reuse=%d\n", "CCO",
-				CCOUtil.getCC2RebuildCount(), CCOUtil.getCC2ExprCount(), CCOUtil.getCC2CallCount(),
-				CCOUtil.getCC2CacheCount(), CCOUtil.getCC2ReuseCount()));
-		sb.append(String.format("%10s: rebuild=%d, expr=%d, call=%d, node=%d, compute=%d, level=%d, stack=%d\n", "TCO",
-				TCOUtil.getRebuildCount(), TCOUtil.getExprCount(), TCOUtil.getCallCount(), TCOUtil.getNodeCount(),
-				TCOUtil.getComputeCount(), TCOUtil.getMaxLevelCount(), TCOUtil.getMaxStackSize()));
-		sb.append(String.format("%10s: rebuild=%d, arg=%d, pass=%d, hit=%d\n", "LCO", LCOUtil.getRebuildCount(),
-				LCOUtil.getArgCount(), LCOUtil.getPassCount(), LCOUtil.getHitCount()));
+
+		if (optTracerNameList != null) {
+			for (String name : optTracerNameList) {
+				IROptInfoTracer tracer = optTracerMap.get(name);
+				sb.append(String.format("%10s: %s\n", name, tracer.printInfo(interpreter)));
+			}
+		}
+
 		sb.append(SEP_LINE1);
 
 	}
@@ -751,6 +869,16 @@ public class TraceUtil {
 		sb.append(SEP_LINE1);
 
 		return sb.toString();
+	}
+
+	static void registerOptInfoTracer(String name, IROptInfoTracer tracer) {
+
+		if (optTracerNameList.contains(name)) {
+			return;
+		}
+
+		optTracerNameList.add(name);
+		optTracerMap.put(name, tracer);
 	}
 
 }

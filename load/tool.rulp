@@ -1,0 +1,253 @@
+;****************************************************;
+; Basic tools
+;****************************************************;
+
+(defmacro -- (?v) (setq ?v (- ?v 1)))
+(defmacro ++ (?v) (setq ?v (+ ?v 1)))
+
+(defmacro inc (?var ?value) (setq ?var (+ ?var ?value)))
+(defmacro dec (?var ?value) (setq ?var (- ?var ?value)))
+
+(defun max (?a ?b) 
+    (if (>= ?a ?b)
+        (return ?a)
+        (return ?b)
+    )
+)
+
+(defun max ((?list list))
+    
+    (defvar ?size (size-of-list ?list))
+    (if (= ?size 0)
+        (return nil)
+    )
+
+    (defvar ?_max_ (get-of-list ?list 0))
+
+    (loop for ?i from 1 to (- ?size 1) do
+        (defvar ?v (get-of-list ?list ?i))
+        (if (> ?v ?_max_)
+            (setq ?_max_ ?v)
+        )
+    )
+    
+    (return ?_max_)
+)
+
+
+(defun min (?a ?b)
+    (if (<= ?a ?b)
+        (return ?a)
+        (return ?b)
+    )
+)
+
+(defun min ((?list list))
+    
+    (defvar ?size (size-of-list ?list))
+    (if (= ?size 0)
+        (return nil)
+    )
+
+    (defvar ?_min_ (get-of-list ?list 0))
+
+    (loop for ?i from 1 to (- ?size 1) do
+        (defvar ?v (get-of-list ?list ?i))
+        (if (< ?v ?_min_)
+            (setq ?_min_ ?v)
+        )
+    )
+    
+    (return ?_min_)
+)
+
+;****************************************************;
+; String tools
+;****************************************************;
+(defun is-empty ((?l string)) (return (= (str-length ?l) 0)))
+(defun is-blank ((?l string)) (return (= (str-length (str-trim ?l)) 0)))
+
+(defun file-prename ((?path string))
+    
+    (defvar ?new-path ?path)
+    (defvar ?pos (str-last-index-of ?new-path "."))
+    (if (!= ?pos -1)
+        (setq ?new-path (str-substr ?new-path 0 ?pos))
+    )
+
+    (return ?new-path)
+)
+
+(defun file-subffix ((?path string))
+    
+    (defvar ?new-path ?path)
+    (defvar ?pos (str-last-index-of ?new-path "."))
+    (if (!= ?pos -1)
+        (setq ?new-path (str-substr ?new-path (+ ?pos 1)))
+    )
+
+    (return ?new-path)
+)
+
+(defun str-split-line ((?str string))
+    
+    (defvar ?lines (make-array))
+    (defvar ?pos1 0)
+    (defvar ?pos2)
+    
+    (loop
+        (setq ?pos2 (str-index-of ?str "\n" ?pos1))
+        (if (= ?pos2 -1)
+            (break)
+        )
+        (add ?lines (str-substr ?str ?pos1 ?pos2))
+        (setq ?pos1 (+ ?pos2 1))
+    )
+    
+    (if (< ?pos1 (length-of ?str))
+         (add ?lines (str-substr ?str ?pos1))
+         (add ?lines "")
+    )
+    
+    (return (to-list ?lines))
+)
+
+(defun to-one-line ((?list list))
+    (defvar ?rst "")
+    (loop for ?line in ?list do
+        (setq ?rst (+ ?rst (str-replace ?line "\n" " ")))
+    )
+    (return ?rst)
+)
+
+;****************************************************;
+; Collection tools
+;****************************************************;
+
+(defun sort ((?l list)) (return (sort-list ?l)))
+(defun sort ((?l list) (?cmp func)) (return (sort-list ?l ?cmp)))
+
+(defun sort ((?arr array)) 
+
+    (defvar ?size (size-of ?arr))
+    (if (<= ?size 1)
+        (return ?arr)
+    )
+
+    (defvar ?list (to-list ?arr))
+    (setq ?list (sort-list ?list))
+
+    (if (is-const $(value-of ?arr))
+        (return (to-array ?list))
+    )
+    
+    (defvar ?index 0)
+    (loop for ?i from 0 to (- ?size 1) do
+        (seta ?arr ?i (get ?list ?i))
+    )
+    
+    (return ?arr)
+)
+
+(defun sort ((?arr array) (?cmp func))
+
+    (defvar ?size (size-of ?arr))
+    (if (<= ?size 1)
+        (return ?arr)
+    )
+
+    (defvar ?list (to-list ?arr))
+    (setq ?list (sort-list ?list ?cmp))
+
+    (if (is-const $(value-of ?arr))
+        (return (to-array ?list))
+    )
+    
+    (defvar ?index 0)
+    (loop for ?i from 0 to (- ?size 1) do
+        (seta ?arr ?i (get ?list ?i))
+    )
+    
+    (return ?arr)    
+)
+
+;****************************************************;
+; Subject tools
+;****************************************************;
+(defun print-list ((?list list)) 
+    (loop for ?e in ?list do 
+        (print ?e "\n")
+    )
+)
+
+(defun print-list (?subject ?type) 
+    (if (equal ?subject local)
+    
+        (print-list (value-of (:: (value-of local::parent) parent)) ?type)
+        
+        (loop for ?mbr in (list-of ?subject) do 
+            (if (and (not (equal ?type nil)) 
+                     (not (equal ?type (type-of $(value-of (value-of ?mbr))))))
+                (continue)
+            )
+
+            ;; output member 
+            (print "mbr=" (name-of $(value-of ?mbr)))
+            
+            (if (not (access $(value-of ?mbr)))
+                (do
+                    (print ", access deny\n")
+                    (continue)
+                )
+            )
+
+            (print ", mbr-property=" (property-of $(value-of ?mbr)))
+            (print ", mbr-attribute=" (attribute-of $(value-of ?mbr)))
+    
+            (print ", obj=" (name-of $(value-of (value-of ?mbr))))
+            (print ", obj-type=" (type-of $(value-of (value-of ?mbr))))
+            (print ", obj-attribute=" (attribute-of $(value-of (value-of ?mbr))))
+
+            (if (equal (type-of $(value-of (value-of ?mbr))) class)
+                (print ", class-property=" (property-of $(value-of (value-of ?mbr)))))
+            
+            (if (equal (type-of $(value-of (value-of ?mbr))) instance)
+                (print ", instance-class=" (class-of $(value-of (value-of ?mbr)))))
+            
+            (if (equal (type-of $(value-of (value-of ?mbr))) var)
+                (print ", var-value=\"" $(value-of (value-of ?mbr)) "\""))
+
+            (print "\n")
+        )
+    )
+)
+
+(defun print-list (?subject)
+    (print-list ?subject nil)
+)
+
+;****************************************************;
+; File System tools
+;****************************************************;
+(defun to-valid-path ((?path string))
+    
+    (if (= ?path "") 
+        (return ?user.dir))
+
+    (if (str-end-with ?path ?file.separator)
+        (return ?path))
+    
+    (return (+ ?path ?file.separator))
+)
+
+;****************************************************;
+; Time tools
+;****************************************************;
+(defun day-is-bigger-than ((?day1 string) (?day2 string))
+    (return (> (day-number ?day1) (day-number ?day2)))
+)
+
+(defun day-is-smaller-than ((?day1 string) (?day2 string))
+    (return (< (day-number ?day1) (day-number ?day2)))
+)
+

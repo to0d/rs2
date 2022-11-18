@@ -1,0 +1,2 @@
+(load "rulp_opt_bin_0.0.1.jar" )
+(load-class "alpha.rulp.utils.ROLoader")

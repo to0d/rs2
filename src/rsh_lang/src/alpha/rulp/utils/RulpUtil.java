@@ -1416,7 +1416,7 @@ public class RulpUtil {
 		IRObject rst = null;
 		IRIterator<? extends IRObject> iter = catchExpr.listIterator(2);
 		while (iter.hasNext()) {
-			rst = interpreter.compute(frame, iter.next());
+			rst = RuntimeUtil.compute(iter.next(), interpreter, frame);
 		}
 
 		return rst;
@@ -2176,14 +2176,14 @@ public class RulpUtil {
 		case A_THREAD_UNSAFE:
 			return O_THREAD_UNSAFE;
 
-		case A_OPT_CCO:
-			return O_OPT_CCO;
-
-		case A_OPT_ERO:
-			return O_OPT_ERO;
-
-		case A_OPT_TCO:
-			return O_OPT_TCO;
+//		case A_OPT_CCO:
+//			return O_OPT_CCO;
+//
+//		case A_OPT_ERO:
+//			return O_OPT_ERO;
+//
+//		case A_OPT_TCO:
+//			return O_OPT_TCO;
 
 		case A_RETURN_TYPE:
 			return O_RETURN_TYPE;
@@ -2587,7 +2587,7 @@ public class RulpUtil {
 		String name = null;
 
 		if (nameObj != null) {
-			
+
 			switch (nameObj.getType()) {
 			case ATOM:
 				name = RulpUtil.asAtom(nameObj).getName();
